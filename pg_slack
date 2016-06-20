@@ -1,0 +1,76 @@
+#!/usr/bin/env ruby
+
+require 'json'
+require 'net/http'
+require 'net/https'
+require 'optparse'
+
+options = {
+  :text => nil,
+  :channel => "#tech",
+  :username => "pg_slack",
+  :icon_emoji => nil,
+  :icon_url => nil,
+  :mrkdwn => false,
+}
+
+parser = OptionParser.new do|opts|
+	opts.banner = "Usage: pg_slack message [options]"
+
+	opts.on('-c', '--channel channel', 'Channel') do |channel|
+    if channel[0,1] != '#'
+      channel = '#' + channel
+    end
+		options[:channel] = channel
+	end
+
+  opts.on('-u', '--username username', 'Username') do |username|
+		options[:username] = username
+	end
+
+	opts.on('--icon-emoji emoji', 'Icon emoji') do |emoji|
+    if emoji.chars.first != ':'
+      emoji = ':' + emoji
+    end
+    if emoji.chars.first != ':'
+      emoji = emoji + ':'
+    end
+		options[:icon_emoji] = emoji;
+	end
+
+	opts.on('--icon-url url', 'Icon URL') do |url|
+		options[:icon_url] = url;
+	end
+
+  opts.on( '-m', '--mrkdwn', "Format as markdown" ) do
+    options[:markdown] = true
+  end
+
+	opts.on('-h', '--help', 'Displays Help') do
+		puts opts
+		exit
+	end
+end
+parser.parse!
+
+text = ARGV.join(' ')
+raise "No message provided" unless text
+options[:text] = text
+
+# attachment = {
+#   :title => nil,
+#   :title_link => nil,
+#   :text  => nil,
+#   :color => "good",
+#   :fields => nil
+# }
+#
+uri = URI.parse(ENV["PG_SLACK_HOOK"])
+
+https = Net::HTTP.new(uri.host, uri.port)
+https.use_ssl = true
+
+request = Net::HTTP::Post.new(uri.request_uri)
+request.form_data = { :payload => options.to_json }
+
+https.request(request)
