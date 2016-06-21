@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+
+require 'json'
+require 'net/http'
+require 'net/https'
+require 'optparse'
+require 'net/scp'
+
+def post_slack (text, username="Deploy", icon_emoji=":deploy:")
+  attachment = {
+    :title => nil,
+    :title_link => nil,
+    :text  => nil,
+    :color => "good",
+    :fields => nil
+  }
+
+  payload = {
+    :username     => username,
+    :icon_emoji   => icon_emoji,
+    :text         => text,
+    :attachments  => nil,
+  }
+
+  uri = URI.parse(ENV["PG_TECH_HOOK"])
+
+  https = Net::HTTP.new(uri.host, uri.port)
+  https.use_ssl = true
+
+  request = Net::HTTP::Post.new(uri.request_uri)
+  request.form_data = { :payload => payload.to_json }
+
+  https.request(request)
+end
+
+def upload_to_pg_storage (file)
+  post_slack("*Deploying Poligeek:* #{file}")
+  reach = 0
+  post_slack("Uploading *#{file}* to \`storage.poligeek.fr\` : #{(reach * 100).round}%")
+  Net::SCP.upload!("storage.poligeek.fr", "root", file, "/var/www/pg-storage/shows/#{file}") do |ch, name, sent, total|
+    if sent/total.to_f > reach + 0.1
+      reach += 0.1
+      puts "#{name}: #{(reach * 100).round}%"
+      post_slack("Uploading *#{file}* to \`storage.poligeek.fr\` : #{(reach * 100).round}%")
+    end
+  end
+end
+
+upload_to_pg_storage(ARGV[0])
