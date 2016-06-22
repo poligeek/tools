@@ -7,6 +7,8 @@ require 'optparse'
 require 'ruby-progressbar'
 require 'terminfo'
 require 'highline/import'
+require 'rmagick'
+require 'fileutils'
 
 def upload_audio_to_pg_storage (file, release_number)
   new_filename = 'show' + release_number + '.mp3'
@@ -28,6 +30,36 @@ def upload_audio_to_pg_storage (file, release_number)
   end
 end
 
+def upload_covers_to_pg_storage (file, release_number)
+  new_filename = 'cover' + release_number + '.jpg'
+  new_small_filename = 'cover' + release_number + '-small.jpg'
+
+  FileUtils.cp(file, new_filename)
+  i = Magick::Image.read(file).first
+  i.thumbnail(500, 500).write(new_small_filename)
+
+  for file_to_upload in [new_filename, new_small_filename]
+    progressbar = ProgressBar.create(:title => file_to_upload, :starting_at => 0, :total => 100, :format => '%t [%B]')
+    progress = 0
+    puts "Uploading #{file_to_upload} to storage.poligeek.fr"
+    # Slack -> "Uploading #{file_to_upload} to storage.poligeek.fr"
+
+    Net::SCP.upload!("storage.poligeek.fr", "root", file_to_upload, "/var/www/pg-storage/assets/#{file_to_upload}") do |ch, name, sent, total|
+      if sent/total.to_f > progress + 0.01
+        progress += 0.01
+        progressbar.increment
+      end
+
+      if sent == total
+        clear_line()
+        puts "[OK] #{file_to_upload} successfuly uploaded to storage.poligeek.fr"
+        # Slack -> "[OK] #{file_to_upload} successfuly uploaded to storage.poligeek.fr\n"
+        FileUtils.rm(file_to_upload)
+      end
+    end
+  end
+end
+
 def clear_line
 # Probably not the best way to do...
   for i in 0..(TermInfo.screen_size[1] - 1)
@@ -39,7 +71,8 @@ end
 # Parse
 options = {
   :release_number => nil,
-  :audiofile => nil
+  :audiofile => nil,
+  :coverfile => nil
 }
 
 parser = OptionParser.new do|opts|
@@ -47,6 +80,10 @@ parser = OptionParser.new do|opts|
 
 	opts.on('-a', '--audio-file audio-file', 'Podcast audio file') do |audiofile|
     options[:audiofile] = audiofile
+	end
+
+	opts.on('-c', '--cover cover', 'Cover of the episode') do |coverfile|
+    options[:coverfile] = coverfile
 	end
 
 	opts.on('-h', '--help', 'Displays Help') do
@@ -64,8 +101,15 @@ raise "No audio file provided" unless options[:audiofile]
 # Prompt confirmation
 puts "-----------"
 puts "Audio file: #{options[:audiofile]}"
+if options[:coverfile] != nil
+  puts "Cover file: #{options[:coverfile]}"
+end
 puts "-----------"
 exit unless HighLine.agree("Ready to upload ##{options[:release_number]}. Do you want to proceed? (Y/N)")
 
 # Perform actions
 upload_audio_to_pg_storage(options[:audiofile], options[:release_number])
+
+if options[:coverfile] != nil
+  upload_covers_to_pg_storage(options[:coverfile], options[:release_number])
+end
