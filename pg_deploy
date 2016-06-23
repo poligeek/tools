@@ -1,49 +1,147 @@
 #!/usr/bin/env ruby
 
-require 'json'
 require 'net/http'
 require 'net/https'
-require 'optparse'
 require 'net/scp'
+require 'optparse'
+require 'ruby-progressbar'
+require 'terminfo'
+require 'highline/import'
+require 'rmagick'
+require 'fileutils'
 
-def post_slack (text, username="Deploy", icon_emoji=":deploy:")
-  attachment = {
-    :title => nil,
-    :title_link => nil,
-    :text  => nil,
-    :color => "good",
-    :fields => nil
-  }
+PG_TEMPORARY_FOLDER_PATH = '/tmp/pg_deploy/'
 
-  payload = {
-    :username     => username,
-    :icon_emoji   => icon_emoji,
-    :text         => text,
-    :attachments  => nil,
-  }
+def upload_audio_to_pg_storage (file, release_number)
+  filename = 'show' + release_number + '.mp3'
+  filepath = PG_TEMPORARY_FOLDER_PATH + filename
+  FileUtils.cp(file, filepath)
 
-  uri = URI.parse(ENV["PG_TECH_HOOK"])
+  progress = 0
+  puts "Uploading #{filename} to storage.poligeek.fr"
+  progressbar = ProgressBar.create(:title => filename, :starting_at => 0, :total => 100, :format => '%t [%B]')
+  # Slack -> "Uploading #{new_filename} to storage.poligeek.fr"
+  Net::SCP.upload!("storage.poligeek.fr", "root", filepath, "/var/www/pg-storage/shows/#{filename}") do |ch, name, sent, total|
+    if sent/total.to_f > progress + 0.01
+      progress += 0.01
+      progressbar.increment
+    end
 
-  https = Net::HTTP.new(uri.host, uri.port)
-  https.use_ssl = true
-
-  request = Net::HTTP::Post.new(uri.request_uri)
-  request.form_data = { :payload => payload.to_json }
-
-  https.request(request)
-end
-
-def upload_to_pg_storage (file)
-  post_slack("*Deploying Poligeek:* #{file}")
-  reach = 0
-  post_slack("Uploading *#{file}* to \`storage.poligeek.fr\` : #{(reach * 100).round}%")
-  Net::SCP.upload!("storage.poligeek.fr", "root", file, "/var/www/pg-storage/shows/#{file}") do |ch, name, sent, total|
-    if sent/total.to_f > reach + 0.1
-      reach += 0.1
-      puts "#{name}: #{(reach * 100).round}%"
-      post_slack("Uploading *#{file}* to \`storage.poligeek.fr\` : #{(reach * 100).round}%")
+    if sent == total
+      clear_line()
+      puts "[OK] #{filename} successfuly uploaded to storage.poligeek.fr"
+      # Slack -> "[OK] #{filename} successfuly uploaded to storage.poligeek.fr\n"
     end
   end
 end
 
-upload_to_pg_storage(ARGV[0])
+def upload_covers_to_pg_storage (file, release_number)
+  filename = 'cover' + release_number + '.jpg'
+  filepath = PG_TEMPORARY_FOLDER_PATH + filename
+  small_filename = 'cover' + release_number + '-small.jpg'
+  small_filepath = PG_TEMPORARY_FOLDER_PATH + small_filename
+
+  FileUtils.cp(file, filepath)
+  i = Magick::Image.read(file).first
+  i.thumbnail(500, 500).write(small_filepath)
+
+  # Upload Cover
+  progress = 0
+  progressbar = ProgressBar.create(:title => small_filename, :starting_at => 0, :total => 100, :format => '%t [%B]')
+  puts "Uploading #{filename} to storage.poligeek.fr"
+  # Slack -> "Uploading #{filename} to storage.poligeek.fr"
+
+  Net::SCP.upload!("storage.poligeek.fr", "root", filepath, "/var/www/pg-storage/assets/#{filename}") do |ch, name, sent, total|
+    if sent/total.to_f > progress + 0.01
+      progress += 0.01
+      progressbar.increment
+    end
+
+    if sent == total
+      clear_line()
+      puts "[OK] #{filename} successfuly uploaded to storage.poligeek.fr"
+      # Slack -> "[OK] #{filename} successfuly uploaded to storage.poligeek.fr\n"
+    end
+  end
+
+  # Upload Small Cover
+  progress = 0
+  progressbar = ProgressBar.create(:title => small_filename, :starting_at => 0, :total => 100, :format => '%t [%B]')
+  puts "Uploading #{small_filename} to storage.poligeek.fr"
+  # Slack -> "Uploading #{small_filename} to storage.poligeek.fr"
+
+  Net::SCP.upload!("storage.poligeek.fr", "root", small_filepath, "/var/www/pg-storage/assets/#{small_filename}") do |ch, name, sent, total|
+    if sent/total.to_f > progress + 0.01
+      progress += 0.01
+      progressbar.increment
+    end
+
+    if sent == total
+      clear_line()
+      puts "[OK] #{small_filename} successfuly uploaded to storage.poligeek.fr"
+      # Slack -> "[OK] #{small_filename} successfuly uploaded to storage.poligeek.fr\n"
+    end
+  end
+end
+
+def clear_line
+# Probably not the best way to do...
+  for i in 0..(TermInfo.screen_size[1] - 1)
+    print " "
+  end
+  print "\r"
+end
+
+def cleanup
+  FileUtils.rm_r(PG_TEMPORARY_FOLDER_PATH, :force => true)
+end
+
+# Parse
+options = {
+  :release_number => nil,
+  :audiofile => nil,
+  :coverfile => nil
+}
+
+parser = OptionParser.new do|opts|
+	opts.banner = "Usage: pg_slack message [options]"
+
+	opts.on('-a', '--audio-file audio-file', 'Podcast audio file') do |audiofile|
+    options[:audiofile] = audiofile
+	end
+
+	opts.on('-c', '--cover cover', 'Cover of the episode') do |coverfile|
+    options[:coverfile] = coverfile
+	end
+
+	opts.on('-h', '--help', 'Displays Help') do
+		puts opts
+		exit
+	end
+end
+parser.parse!
+options[:release_number] = ARGV[0]
+
+# Validation checks
+raise "No release number provided" unless options[:release_number]
+raise "No audio file provided" unless options[:audiofile]
+
+# Prompt confirmation
+puts "-----------"
+puts "Audio file: #{options[:audiofile]}"
+if options[:coverfile] != nil
+  puts "Cover file: #{options[:coverfile]}"
+end
+puts "-----------"
+exit unless HighLine.agree("Ready to upload ##{options[:release_number]}. Do you want to proceed? (Y/N)")
+
+# Perform actions
+FileUtils.mkdir(PG_TEMPORARY_FOLDER_PATH)
+
+upload_audio_to_pg_storage(options[:audiofile], options[:release_number])
+
+if options[:coverfile] != nil
+  upload_covers_to_pg_storage(options[:coverfile], options[:release_number])
+end
+
+cleanup()
